@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-import io
 import json
 import logging
 import tempfile
@@ -14,8 +13,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+import anthropic
+from openai import AsyncOpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -24,8 +23,13 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
-CLAUDE_MODEL = ("anthropic", "claude-sonnet-4-5-20250929")
+CLAUDE_API_KEY = os.environ['CLAUDE_API_KEY']
+OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
+
+anthropic_client = anthropic.AsyncAnthropic(api_key=CLAUDE_API_KEY)
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -198,6 +202,26 @@ async def _recent_workouts_summary(limit: int = 20) -> str:
     return "\n".join(lines) if lines else "No logged sets yet."
 
 
+async def _call_claude(system: str, user: str, max_tokens: int = 2048) -> str:
+    message = await anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return message.content[0].text
+
+
+async def _call_claude_with_history(system: str, messages: list, max_tokens: int = 2048) -> str:
+    message = await anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+    )
+    return message.content[0].text
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -233,7 +257,6 @@ async def list_exercises():
 @api_router.post("/workouts", response_model=Workout)
 async def create_workout(payload: WorkoutCreate):
     w = Workout(**payload.dict(exclude_unset=True))
-    # attach muscle_group if missing
     ex_map = {e["name"].lower(): e for e in await db.exercises.find({}, {"_id": 0}).to_list(500)}
     for ex in w.exercises:
         if not ex.muscle_group:
@@ -271,8 +294,6 @@ async def delete_workout(workout_id: str):
 async def stats_overview():
     workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(500)
     total_workouts = len(workouts)
-
-    # week streak
     today = datetime.now(timezone.utc).date()
     dates = set()
     for w in workouts:
@@ -281,7 +302,6 @@ async def stats_overview():
             dates.add(d.date())
     streak = 0
     cur = today
-    # count consecutive days ending today (or yesterday) that have workouts
     while cur in dates:
         streak += 1
         cur = cur - timedelta(days=1)
@@ -290,8 +310,6 @@ async def stats_overview():
         while cur in dates:
             streak += 1
             cur = cur - timedelta(days=1)
-
-    # volume by muscle last 30 days (Mongo returns naive datetimes, so keep cutoff naive too)
     cutoff = datetime.utcnow() - timedelta(days=30)
     volume_by_muscle: Dict[str, float] = defaultdict(float)
     sets_count = 0
@@ -314,14 +332,11 @@ async def stats_overview():
                     volume_by_muscle[mg] += vol
                     sets_count += 1
                     total_volume += vol
-                # PR tracking (1RM estimate - Epley)
                 if wt > 0 and reps > 0:
                     e1rm = wt * (1 + reps / 30.0)
                     name = ex.get("name")
                     if name and (name not in prs or e1rm > prs[name]):
                         prs[name] = round(e1rm, 1)
-
-    # weekly volume trend (last 8 weeks)
     weekly = defaultdict(float)
     for w in workouts:
         wdate = w.get("date")
@@ -335,7 +350,6 @@ async def stats_overview():
                 weekly[week_key] += float(s.get("weight") or 0) * int(s.get("reps") or 0)
     weekly_sorted = sorted(weekly.items())[-8:]
     weekly_trend = [{"week": k.isoformat(), "volume": round(v, 1)} for k, v in weekly_sorted]
-
     top_prs = sorted(prs.items(), key=lambda x: -x[1])[:5]
     return {
         "total_workouts": total_workouts,
@@ -352,9 +366,7 @@ async def stats_overview():
 @api_router.post("/parse_workout")
 async def parse_workout(req: ParseRequest):
     exercises_doc = await db.exercises.find({}, {"_id": 0, "name": 1, "aliases": 1, "muscle_group": 1}).to_list(500)
-    ex_names = [e["name"] for e in exercises_doc]
     ex_context = "\n".join(f"- {e['name']} ({e['muscle_group']})" for e in exercises_doc)
-
     system = (
         "You are a strict workout-log parser. The user describes a workout in free-form text. "
         "Extract structured data and return ONLY valid JSON (no markdown, no explanation).\n\n"
@@ -373,41 +385,29 @@ async def parse_workout(req: ParseRequest):
         "Rules:\n"
         "- Weight in whatever unit user mentioned; just use the number (default lbs).\n"
         "- If reps listed per set (e.g. '8,8,7,6'), create one set per value with the same weight.\n"
-        "- 'grind/grinder/failure' → notes on that set.\n"
+        "- 'grind/grinder/failure' -> notes on that set.\n"
         "- Prefer exact exercise name from this list when possible:\n"
         f"{ex_context}\n"
         "- If no exercise mentioned, return exercises: [].\n"
         "- Return JSON only."
     )
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"parse-{uuid.uuid4()}",
-        system_message=system,
-    ).with_model(*CLAUDE_MODEL)
-
     try:
-        response = await chat.send_message(UserMessage(text=req.text))
+        response = await _call_claude(system=system, user=req.text, max_tokens=1024)
     except Exception as e:
         logger.exception("parse_workout failed")
         raise HTTPException(status_code=500, detail=f"AI parse failed: {str(e)}")
-
     raw = response.strip()
-    # strip code fences if any
     if raw.startswith("```"):
         raw = raw.strip("`")
         if raw.lower().startswith("json"):
             raw = raw[4:].strip()
-    # try extract JSON
     try:
         start = raw.index("{")
         end = raw.rindex("}")
         data = json.loads(raw[start:end + 1])
-    except Exception as e:
+    except Exception:
         logger.error(f"Parse JSON fail: {raw}")
         raise HTTPException(status_code=500, detail="Could not parse AI response")
-
-    # normalize
     exercises_out = []
     for ex in data.get("exercises", []):
         name = ex.get("name", "").strip()
@@ -424,16 +424,8 @@ async def parse_workout(req: ParseRequest):
                 })
             except Exception:
                 continue
-        exercises_out.append({
-            "name": name,
-            "muscle_group": ex.get("muscle_group"),
-            "sets": sets,
-        })
-    return {
-        "title": data.get("title"),
-        "exercises": exercises_out,
-        "notes": data.get("notes"),
-    }
+        exercises_out.append({"name": name, "muscle_group": ex.get("muscle_group"), "sets": sets})
+    return {"title": data.get("title"), "exercises": exercises_out, "notes": data.get("notes")}
 
 
 # Chat
@@ -454,7 +446,6 @@ async def chat_send(req: ChatRequest):
     profile = await _get_profile()
     summary = await _recent_workouts_summary(30)
     stats = await stats_overview()
-
     system = (
         "You are Forge, an elite AI strength & conditioning coach embedded in a workout app.\n"
         f"The athlete's profile: name={profile.name}, goal={profile.goal}, experience={profile.experience}, "
@@ -471,35 +462,20 @@ async def chat_send(req: ChatRequest):
         f"- Top PRs (est 1RM): {stats['top_prs']}\n\n"
         f"RECENT WORKOUT LOGS (most recent first):\n{summary}\n"
     )
-
-    # fetch recent history for multi-turn
     history = await db.chat_messages.find({}, {"_id": 0}).sort("created_at", 1).to_list(100)
-
-    session_id = "coach-main"
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=system,
-    ).with_model(*CLAUDE_MODEL)
-
-    # LlmChat handles multi-turn via session_id, but the library creates its own history file.
-    # We'll just pass the latest message; the system prompt already has context.
     user_msg_doc = ChatMessage(role="user", content=req.message)
     await db.chat_messages.insert_one(user_msg_doc.dict())
-
+    messages = []
+    for m in history[-10:]:
+        role = m.get("role", "user")
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": m.get("content", "")})
+    messages.append({"role": "user", "content": req.message})
     try:
-        # Send conversation as a simple concatenation so the model has recent chat context
-        transcript = ""
-        for m in history[-10:]:
-            role = m.get("role", "user")
-            transcript += f"\n[{role.upper()}]: {m.get('content', '')}\n"
-        transcript += f"\n[USER]: {req.message}\n"
-
-        response = await chat.send_message(UserMessage(text=transcript))
+        response = await _call_claude_with_history(system=system, messages=messages, max_tokens=2048)
     except Exception as e:
         logger.exception("chat_send failed")
         raise HTTPException(status_code=500, detail=f"AI chat failed: {str(e)}")
-
     assistant_doc = ChatMessage(role="assistant", content=response.strip())
     await db.chat_messages.insert_one(assistant_doc.dict())
     return assistant_doc
@@ -510,15 +486,9 @@ async def chat_send(req: ChatRequest):
 async def generate_insights():
     workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).limit(60).to_list(60)
     if len(workouts) < 2:
-        return {
-            "insights": [
-                {"title": "Log more sessions", "detail": "Log at least 3 workouts so your AI coach can detect patterns."}
-            ]
-        }
-
+        return {"insights": [{"title": "Log more sessions", "detail": "Log at least 3 workouts so your AI coach can detect patterns."}]}
     summary = await _recent_workouts_summary(40)
     stats = await stats_overview()
-
     system = (
         "You are a sports scientist. Given an athlete's recent workouts and summary stats, "
         "produce 3-6 concrete INSIGHTS they wouldn't notice manually. "
@@ -530,19 +500,11 @@ async def generate_insights():
         f"STATS:\n{json.dumps(stats, default=str)}\n\nRECENT WORKOUTS:\n{summary}\n\n"
         "Find plateaus, volume drops, muscle imbalances, day-of-week patterns, or positive trends."
     )
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"insights-{uuid.uuid4()}",
-        system_message=system,
-    ).with_model(*CLAUDE_MODEL)
-
     try:
-        response = await chat.send_message(UserMessage(text=user))
+        response = await _call_claude(system=system, user=user, max_tokens=1024)
     except Exception as e:
         logger.exception("insights failed")
         raise HTTPException(status_code=500, detail=f"AI insights failed: {str(e)}")
-
     raw = response.strip()
     if raw.startswith("```"):
         raw = raw.strip("`")
@@ -554,9 +516,7 @@ async def generate_insights():
         data = json.loads(raw[start:end + 1])
     except Exception:
         return {"insights": [{"title": "Analysis complete", "detail": raw[:300], "severity": "info"}]}
-
     out = data.get("insights", [])
-    # cache
     await db.insights.delete_many({})
     await db.insights.insert_one({"generated_at": datetime.now(timezone.utc), "insights": out})
     return {"insights": out}
@@ -570,7 +530,7 @@ async def get_cached_insights():
     return doc
 
 
-# Transcribe
+# Transcribe (uses OpenAI Whisper)
 @api_router.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     if not file.filename:
@@ -578,12 +538,9 @@ async def transcribe(file: UploadFile = File(...)):
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
-
-    # Detect extension from filename or content-type
     ext = Path(file.filename).suffix.lstrip(".").lower()
     valid_exts = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}
     if ext not in valid_exts:
-        # try from content_type
         ct = (file.content_type or "").lower()
         if "mp4" in ct or "m4a" in ct:
             ext = "m4a"
@@ -595,16 +552,17 @@ async def transcribe(file: UploadFile = File(...)):
             ext = "mp3"
         else:
             ext = "m4a"
-
     with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
-
     try:
-        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
         with open(tmp_path, "rb") as f:
-            resp = await stt.transcribe(file=f, model="whisper-1", response_format="json")
-        text = getattr(resp, "text", None) or (resp.get("text") if isinstance(resp, dict) else None) or ""
+            transcript = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="json"
+            )
+        text = transcript.text if hasattr(transcript, "text") else ""
         return {"text": text}
     except Exception as e:
         logger.exception("transcribe failed")
