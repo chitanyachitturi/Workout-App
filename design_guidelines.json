@@ -1,0 +1,118 @@
+{
+  "theme": "DARK",
+  "archetype": "2 (Performance Pro)",
+  "vibe": "Elite, Data-Driven, Intense, High-contrast tactical. Rivaling Whoop, Strong, Hevy.",
+  "colors": {
+    "background": "#0A0A0A",
+    "surface": "#161618",
+    "surface_elevated": "#1C1C1E",
+    "border": "#2C2C2E",
+    "primary": "#FF3B30",
+    "primary_muted": "rgba(255, 59, 48, 0.2)",
+    "accent_success": "#32D74B",
+    "accent_warning": "#FFD60A",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "text_tertiary": "#71717A"
+  },
+  "typography": {
+    "fonts": {
+      "headings": "Barlow Condensed",
+      "body": "Manrope",
+      "data_numbers": "Barlow Condensed"
+    },
+    "sizes_px": {
+      "h1": 48,
+      "h2": 32,
+      "h3": 24,
+      "h4": 20,
+      "body": 16,
+      "small": 14,
+      "tiny": 12
+    },
+    "rules": [
+      "Headings must be Uppercase with letter-spacing (tracking) for impact.",
+      "Data numbers (e.g. 225 lbs) must use Barlow Condensed Black or 900 weight.",
+      "Never center text by default. Align left for rapid scannability while working out."
+    ]
+  },
+  "layout_and_spacing": {
+    "touch_targets": "Minimum 48x48px height for all interactive elements. Sweaty hands require large targets.",
+    "padding": {
+      "screen": 16,
+      "card": 16,
+      "pill": 8,
+      "pill_horizontal": 16
+    },
+    "border_radius": {
+      "card": 12,
+      "button": 8,
+      "pill": 9999
+    },
+    "surface_rules": "No soft shadows. Use 1px solid stroke (border-[#2C2C2E]) on all cards. Background must be flat #161618."
+  },
+  "key_components": {
+    "workout_logging_card": {
+      "style": "Flat surface, strict grid. Left-aligned exercise name. High-contrast input fields for reps/lbs.",
+      "interactions": "Highlight active set with a primary border (#FF3B30) or subtle #FF3B30 background tint."
+    },
+    "voice_input_button": {
+      "style": "Massive FAB (Floating Action Button) or wide block at bottom. #FF3B30 background.",
+      "active_state": "When recording, display dynamic waveform using Reanimated. Outer glow box-shadow."
+    },
+    "ai_coach_chat": {
+      "user_bubble": "Background #1C1C1E, Text #FFFFFF.",
+      "ai_bubble": "Background #0A0A0A, 1px border #2C2C2E, subtle left-border accent in #FF3B30."
+    },
+    "charts_insights": {
+      "style": "Use react-native-chart-kit or Victory. Lines must be Electric Blaze (#FF3B30). Tooltips must be crisp, high contrast.",
+      "bar_charts": "Max width for bars, tiny gaps, square corners."
+    }
+  },
+  "icons": {
+    "library": "@expo/vector-icons",
+    "family": "Ionicons",
+    "style": "Sharp, medium weight. Use 'outline' variants for inactive, 'sharp' or filled for active states.",
+    "color": "Use #FFFFFF for active/primary icons, #A1A1AA for secondary."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/1f92b378-a9ab-4f21-8b65-3159ad0597c8/images/623f1c253898af4fec27208d99927f744581cd3916a8240e5b3ef727ecebcdac.png",
+        "category": "onboarding_bg",
+        "description": "Cinematic close-up of matte black gym weights. Use as hero background for onboarding/auth or main splash screen."
+      },
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/1f92b378-a9ab-4f21-8b65-3159ad0597c8/images/e26f0b0d5c1aace551de0363c98fcddc19d0d76567ad610fef132cda1b631224.png",
+        "category": "ai_coach_avatar",
+        "description": "Abstract 3D glowing particle orb. Use as the avatar for the Conversational Coach."
+      },
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/1f92b378-a9ab-4f21-8b65-3159ad0597c8/images/290fe1778de354eda074e7f11670408b22b69800f4145cdfaf77dd0f31f73bcf.png",
+        "category": "data_insight_bg",
+        "description": "Minimalist dark aesthetic graph visualization. Use as background for the Goal Tracking & Projections empty state."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1734630341082-0fec0e10126c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTJ8MHwxfHNlYXJjaHwyfHxneW0lMjB3b3Jrb3V0JTIwZGFyayUyMG1vb2R5fGVufDB8fHx8MTc3NzkwNjE3N3ww&ixlib=rb-4.1.0&q=85",
+        "category": "workout_history_thumbnail",
+        "description": "Row of dumbbells. Use as default thumbnail for logged strength workouts."
+      }
+    ]
+  },
+  "motion_and_interaction": {
+    "active_states": "All buttons must reduce opacity to 0.7 on press (React Native activeOpacity).",
+    "voice_animation": "When Voice Logging is active, pulse the record button from 1x to 1.2x scale, looping via React Native Reanimated.",
+    "page_transitions": "Use Expo Router default slide-from-right iOS transitions for navigation."
+  },
+  "testing": {
+    "rules": "All interactive elements MUST include data-testid attribute formatted as kebab-case, role-based. Example: data-testid='start-workout-button'."
+  },
+  "instructions_to_main_agent": [
+    "Since this is a React Native Expo environment, use standard StyleSheet.create for styling. Translate the provided hex codes and sizes into JS objects.",
+    "Create .js files, NOT .tsx files.",
+    "Do NOT use HTML tags (div, span). Use View, Text, TouchableOpacity, ScrollView from 'react-native'.",
+    "For iOS-first, ensure safe area padding using react-native-safe-area-context (SafeAreaView or useSafeAreaInsets).",
+    "Use @expo/vector-icons (Ionicons) exclusively for iconography.",
+    "For the bottom tab nav (using expo-router Tabs), set the tabBarStyle backgroundColor to #161618, borderTopColor to #2C2C2E, and activeTintColor to #FF3B30."
+  ]
+}
