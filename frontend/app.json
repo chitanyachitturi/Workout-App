@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.chitanyachitturi.forge",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Log workouts by speaking your sets aloud."
       }
